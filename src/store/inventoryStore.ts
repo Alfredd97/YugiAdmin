@@ -2,19 +2,24 @@ import { create } from 'zustand';
 import type { CardItem, DeckItem, AccessoryItem, BaseItem } from '../types/store';
 import { applyPricingToItems } from '../utils/pricing';
 import { useSettingsStore } from './settingsStore';
-import { pb } from '../utils/pocketbase';
+import { cardsService, decksService, accessoriesService } from '../services';
 
 type Kind = 'card' | 'deck' | 'accessory';
 
-type CollectionName = 'cards' | 'decks' | 'accessories';
+type ServiceType = typeof cardsService;
 
-const collectionByKind: Record<Kind, CollectionName> = {
+const serviceByKind: Record<Kind, ServiceType> = {
+  card: cardsService,
+  deck: decksService,
+  accessory: accessoriesService
+};
+
+// Map Kind to the state property name (handles 'accessory' -> 'accessories')
+const stateKeyByKind: Record<Kind, keyof InventoryStore> = {
   card: 'cards',
   deck: 'decks',
   accessory: 'accessories'
 };
-
-type PbItemRecord = Omit<BaseItem, 'id'> & { id: string };
 
 interface InventoryStore {
   cards: CardItem[];
@@ -32,35 +37,6 @@ interface InventoryStore {
   applyPricingToAll: () => Promise<void>;
 }
 
-const mapPbToItem = (record: PbItemRecord): BaseItem => ({
-  id: record.id,
-  name: record.name,
-  sellerName: record.sellerName,
-  gameFormat: record.gameFormat,
-  condition: record.condition,
-  expansionCode: record.expansionCode,
-  rarity: record.rarity,
-  quantity: record.quantity,
-  priceUsd: record.priceUsd,
-  priceCup: record.priceCup
-});
-
-const listAll = async (collection: CollectionName): Promise<BaseItem[]> => {
-  // PocketBase caps per-page, so we paginate.
-  const pageSize = 200;
-  let page = 1;
-  const all: BaseItem[] = [];
-  while (true) {
-    const result = await pb.collection(collection).getList<PbItemRecord>(page, pageSize, {
-      sort: '-created'
-    });
-    all.push(...result.items.map(mapPbToItem));
-    if (result.page >= result.totalPages) break;
-    page += 1;
-  }
-  return all;
-};
-
 export const useInventoryStore = create<InventoryStore>((set, get) => ({
   cards: [],
   decks: [],
@@ -68,13 +44,16 @@ export const useInventoryStore = create<InventoryStore>((set, get) => ({
   isLoading: false,
   error: null,
   fetchAll: async () => {
+    console.log('[inventoryStore] Starting fetchAll...');
     set({ isLoading: true, error: null });
     try {
+      console.log('[inventoryStore] Fetching all collections...');
       const [cards, decks, accessories] = await Promise.all([
-        listAll('cards'),
-        listAll('decks'),
-        listAll('accessories')
+        cardsService.listAll(),
+        decksService.listAll(),
+        accessoriesService.listAll()
       ]);
+      console.log(`[inventoryStore] Fetched: ${cards.length} cards, ${decks.length} decks, ${accessories.length} accessories`);
       set({
         cards: cards as CardItem[],
         decks: decks as DeckItem[],
@@ -82,102 +61,144 @@ export const useInventoryStore = create<InventoryStore>((set, get) => ({
         isLoading: false,
         error: null
       });
-    } catch (err) {
-      console.error(err);
+      console.log('[inventoryStore] Fetch complete!');
+    } catch (err: any) {
+      console.error('[inventoryStore] fetchAll error:', err);
+      console.error('[inventoryStore] Error status:', err.status);
+      console.error('[inventoryStore] Error response:', err.response);
       set({
         isLoading: false,
-        error: 'Failed to load inventory from PocketBase. Check VITE_PB_URL and your collections.'
+        error: `Failed to load inventory: ${err.message || 'Check console for details'}`
       });
     }
   },
   fetchKind: async (type) => {
+    console.log(`[inventoryStore] Fetching ${type}...`);
     set({ isLoading: true, error: null });
     try {
-      const collection = collectionByKind[type];
-      const items = await listAll(collection);
-      set({ [`${type}s`]: items } as Partial<InventoryStore>);
+      const service = serviceByKind[type];
+      const items = await service.listAll();
+      console.log(`[inventoryStore] Fetched ${items.length} ${type}s`);
+      set({ [stateKeyByKind[type]]: items } as Partial<InventoryStore>);
       set({ isLoading: false, error: null });
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error(`[inventoryStore] fetchKind ${type} error:`, err);
       set({
         isLoading: false,
-        error: `Failed to load ${type}s from PocketBase.`
+        error: `Failed to load ${type}s: ${err.message || 'Unknown error'}`
       });
     }
   },
   addItem: async (type, item) => {
-    const collection = collectionByKind[type];
-    const created = await pb.collection(collection).create<PbItemRecord>(item);
-    const mapped = mapPbToItem(created);
-    set((state) => {
-      const current = state[`${type}s` as const] as BaseItem[];
-      return { [`${type}s`]: [mapped, ...current] } as Partial<InventoryStore>;
-    });
+    console.log(`[inventoryStore] Adding ${type}:`, item.name);
+    try {
+      const service = serviceByKind[type];
+      const created = await service.create(item);
+      console.log(`[inventoryStore] Created ${type} with id:`, created.id);
+      set((state) => {
+        const key = stateKeyByKind[type];
+        const current = state[key] as BaseItem[];
+        return { [key]: [created, ...current] } as Partial<InventoryStore>;
+      });
+    } catch (err: any) {
+      console.error(`[inventoryStore] addItem ${type} error:`, err);
+      throw err;
+    }
   },
   updateItem: async (type, item) => {
-    const collection = collectionByKind[type];
-    const { id, ...payload } = item;
-    const updated = await pb.collection(collection).update<PbItemRecord>(id, payload);
-    const mapped = mapPbToItem(updated);
-    set((state) => {
-      const current = state[`${type}s` as const] as BaseItem[];
-      const next = current.map((it) => (it.id === id ? mapped : it));
-      return { [`${type}s`]: next } as Partial<InventoryStore>;
-    });
+    console.log(`[inventoryStore] Updating ${type}:`, item.id);
+    try {
+      const service = serviceByKind[type];
+      const updated = await service.update(item.id, item);
+      console.log(`[inventoryStore] Updated ${type}:`, updated.id);
+      set((state) => {
+        const key = stateKeyByKind[type];
+        const current = state[key] as BaseItem[];
+        const next = current.map((it) => (it.id === item.id ? updated : it));
+        return { [key]: next } as Partial<InventoryStore>;
+      });
+    } catch (err: any) {
+      console.error(`[inventoryStore] updateItem ${type} error:`, err);
+      throw err;
+    }
   },
   deleteItem: async (type, id) => {
-    const collection = collectionByKind[type];
-    await pb.collection(collection).delete(id);
-    set((state) => {
-      const current = state[`${type}s` as const] as BaseItem[];
-      const next = current.filter((it) => it.id !== id);
-      return { [`${type}s`]: next } as Partial<InventoryStore>;
-    });
+    console.log(`[inventoryStore] Deleting ${type}:`, id);
+    try {
+      const service = serviceByKind[type];
+      await service.delete(id);
+      console.log(`[inventoryStore] Deleted ${type}:`, id);
+      set((state) => {
+        const key = stateKeyByKind[type];
+        const current = state[key] as BaseItem[];
+        const next = current.filter((it) => it.id !== id);
+        return { [key]: next } as Partial<InventoryStore>;
+      });
+    } catch (err: any) {
+      console.error(`[inventoryStore] deleteItem ${type} error:`, err);
+      throw err;
+    }
   },
   replaceAll: async (type, items) => {
-    const collection = collectionByKind[type];
-    // Replace by deleting all then re-creating.
-    const existing = await listAll(collection);
-    await Promise.all(existing.map((it) => pb.collection(collection).delete(it.id)));
-    await Promise.all(items.map((it) => pb.collection(collection).create(it)));
-    await get().fetchKind(type);
+    console.log(`[inventoryStore] Replacing all ${type}s...`);
+    try {
+      const service = serviceByKind[type];
+      await service.deleteAll();
+      await service.createMany(items);
+      await get().fetchKind(type);
+      console.log(`[inventoryStore] Replaced all ${type}s`);
+    } catch (err: any) {
+      console.error(`[inventoryStore] replaceAll ${type} error:`, err);
+      throw err;
+    }
   },
   mergeAll: async (type, items) => {
-    const collection = collectionByKind[type];
-    // Merge by upserting: if id exists update, else create.
-    await Promise.all(
-      items.map(async (it) => {
-        try {
-          const { id, ...payload } = it;
-          await pb.collection(collection).update(id, payload);
-        } catch {
-          const { id: _, ...payload } = it;
-          await pb.collection(collection).create(payload);
-        }
-      })
-    );
-    await get().fetchKind(type);
+    console.log(`[inventoryStore] Merging ${type}s...`);
+    try {
+      const service = serviceByKind[type];
+      // Merge by upserting: if id exists update, else create
+      await Promise.all(
+        items.map(async (it) => {
+          try {
+            await service.update(it.id, it);
+          } catch {
+            const { id: _, ...payload } = it;
+            await service.create(payload as Omit<BaseItem, 'id'>);
+          }
+        })
+      );
+      await get().fetchKind(type);
+      console.log(`[inventoryStore] Merged ${type}s`);
+    } catch (err: any) {
+      console.error(`[inventoryStore] mergeAll ${type} error:`, err);
+      throw err;
+    }
   },
   applyPricingToAll: async () => {
-    const settings = useSettingsStore.getState().settings;
-    const state = get();
-    const nextCards = applyPricingToItems(state.cards, settings);
-    const nextDecks = applyPricingToItems(state.decks, settings);
-    const nextAccessories = applyPricingToItems(state.accessories, settings);
+    console.log('[inventoryStore] Applying pricing to all items...');
+    try {
+      const settings = useSettingsStore.getState().settings;
+      const state = get();
+      const nextCards = applyPricingToItems(state.cards, settings);
+      const nextDecks = applyPricingToItems(state.decks, settings);
+      const nextAccessories = applyPricingToItems(state.accessories, settings);
 
-    await Promise.all([
-      ...nextCards.map(({ id, ...payload }) => pb.collection('cards').update(id, payload)),
-      ...nextDecks.map(({ id, ...payload }) => pb.collection('decks').update(id, payload)),
-      ...nextAccessories.map(({ id, ...payload }) =>
-        pb.collection('accessories').update(id, payload)
-      )
-    ]);
+      await Promise.all([
+        ...nextCards.map(({ id, ...payload }) => cardsService.update(id, payload)),
+        ...nextDecks.map(({ id, ...payload }) => decksService.update(id, payload)),
+        ...nextAccessories.map(({ id, ...payload }) => accessoriesService.update(id, payload))
+      ]);
 
-    set({
-      cards: nextCards as CardItem[],
-      decks: nextDecks as DeckItem[],
-      accessories: nextAccessories as AccessoryItem[]
-    });
+      console.log('[inventoryStore] Pricing applied successfully');
+      set({
+        cards: nextCards as CardItem[],
+        decks: nextDecks as DeckItem[],
+        accessories: nextAccessories as AccessoryItem[]
+      });
+    } catch (err: any) {
+      console.error('[inventoryStore] applyPricingToAll error:', err);
+      throw err;
+    }
   }
 }));
 

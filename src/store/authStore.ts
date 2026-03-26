@@ -28,9 +28,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const adminUser = import.meta.env.VITE_ADMIN_USER ?? 'admin';
     const adminPassword = import.meta.env.VITE_ADMIN_PASSWORD ?? 'password';
 
+    // Debug logging (remove after fixing)
+    // eslint-disable-next-line no-console
+    console.log('Login attempt:', { username, adminUser, match: username === adminUser && password === adminPassword });
+
     // Gate login attempts to the configured admin credentials.
     if (username !== adminUser || password !== adminPassword) {
-      set({ isLoading: false, error: 'Invalid credentials.' });
+      set({ isLoading: false, error: `Invalid credentials. Expected: ${adminUser}` });
       return false;
     }
 

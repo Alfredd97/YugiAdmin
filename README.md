@@ -20,15 +20,33 @@ npm install
 
 2. **Create environment file**
 
-Create a `.env` file in the project root:
+Copy `.env.example` to `.env` and fill in your values:
 
 ```bash
+cp .env.example .env
+```
+
+Edit `.env` with your settings:
+
+```bash
+# App Configuration
 VITE_PB_URL=http://127.0.0.1:8090
 VITE_ADMIN_USER=admin
 VITE_ADMIN_PASSWORD=change-me
+
+# PocketBase Admin credentials (for setup script)
+# Get these from your PocketBase admin panel after first setup
+PB_ADMIN_EMAIL=your-pb-admin@example.com
+PB_ADMIN_PASSWORD=your-pb-admin-password
 ```
 
-3. **Run the dev server**
+3. **Run the setup script** (creates collections and default user)
+
+```bash
+npm run setup:pb
+```
+
+4. **Run the dev server**
 
 ```bash
 npm run dev
@@ -37,6 +55,35 @@ npm run dev
 Open the shown URL (by default `http://localhost:5173`) and log in with the credentials set in `.env`.
 
 ### PocketBase backend setup
+
+#### Option 1: Automated Setup (Recommended)
+
+1. **Download and run PocketBase**
+
+- Download PocketBase for your OS from the [official site](https://pocketbase.io/).
+- Start it (default URL is `http://127.0.0.1:8090`).
+- Complete the initial admin setup in the browser (set your admin email/password).
+
+2. **Configure environment**
+
+Add your PocketBase admin credentials to `.env`:
+
+```bash
+PB_ADMIN_EMAIL=your-admin@example.com      # The email you set in PocketBase
+PB_ADMIN_PASSWORD=your-admin-password      # The password you set in PocketBase
+```
+
+3. **Run the automated setup**
+
+```bash
+npm run setup:pb
+```
+
+This creates all collections and the default user automatically.
+
+#### Option 2: Manual Setup
+
+If you prefer to set up manually via the PocketBase admin UI:
 
 1. **Download and run PocketBase**
 

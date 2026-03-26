@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { BaseItem } from '../types/store';
+import type { BaseItem, GameFormat, CardCondition, CardRarity } from '../types/store';
 import { useInventoryStore } from '../store/inventoryStore';
 import { ItemTable } from '../components/ItemTable';
 import { ItemModal } from '../components/ItemModal';
@@ -35,11 +35,17 @@ export const ItemsPage = ({ kind }: ItemsPageProps) => {
 
   const items = kind === 'card' ? cards : kind === 'deck' ? decks : accessories;
 
-  const [filter, setFilter] = useState({
+  const [filter, setFilter] = useState<{
+    search: string;
+    gameFormat: GameFormat | 'all';
+    condition: CardCondition | 'all';
+    rarity: CardRarity | 'all';
+    sellerName: string;
+  }>({
     search: '',
-    gameFormat: 'all' as const,
-    condition: 'all' as const,
-    rarity: 'all' as const,
+    gameFormat: 'all',
+    condition: 'all',
+    rarity: 'all',
     sellerName: ''
   });
   const [modalOpen, setModalOpen] = useState(false);
